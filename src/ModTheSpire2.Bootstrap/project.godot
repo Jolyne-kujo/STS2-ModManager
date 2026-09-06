@@ -1,0 +1,17 @@
+; Minimal Godot project metadata for the StS2 native mod package.
+; Runtime code is in ModTheSpire2.dll and is intentionally dependency-free.
+
+config_version=5
+
+[application]
+
+config/name="ModTheSpire 2 Bootstrap"
+config/features=PackedStringArray("4.5", "C#", "Mobile")
+
+[dotnet]
+
+project/assembly_name="ModTheSpire2"
+
+[rendering]
+
+renderer/rendering_method="mobile"

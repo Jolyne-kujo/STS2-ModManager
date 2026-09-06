@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.vs/
+backup-before-pck-v3-from-game-install/
+dist/
+dist-*/
+*.exe
+*.user
+*.suo

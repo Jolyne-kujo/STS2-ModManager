@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ModTheSpire2.Bootstrap</RootNamespace>
+    <AssemblyName>ModTheSpire2</AssemblyName>
+    <Version>0.3.0</Version>
+    <FileVersion>0.3.0</FileVersion>
+    <AssemblyVersion>0.3.0</AssemblyVersion>
+    <DebugType>none</DebugType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <NoWarn>CA2255</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The game supplies Harmony at runtime; this compatible package is build-time only. -->
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" GeneratePathProperty="true" PrivateAssets="All" />
+  </ItemGroup>
+</Project>
