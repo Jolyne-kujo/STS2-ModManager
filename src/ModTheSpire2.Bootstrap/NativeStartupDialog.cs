@@ -14,6 +14,9 @@ internal static class NativeStartupDialog
     private const uint WmClose = 0x0010;
     private const uint WmDestroy = 0x0002;
     private const uint WmCommand = 0x0111;
+    private const uint WmNotify = 0x004E;
+    private const uint WmApp = 0x8000;
+    private const uint WmIconLoaded = WmApp + 1;
     private const uint BnClicked = 0;
 
     private const uint LvmFirst = 0x1000;
@@ -34,7 +37,18 @@ internal static class NativeStartupDialog
     private const uint LvifText = 0x0001;
     private const uint LvisStateImageMask = 0xF000;
     private const uint LvniSelected = 0x0002;
+    private const int LvnItemChanged = -101;
 
+    private const uint SsLeft = 0x0000;
+    private const uint SsBitmap = 0x000E;
+    private const uint SsCenterImage = 0x0200;
+    private const uint WsBorder = 0x00800000;
+    private const uint StmSetImage = 0x0172;
+    private const uint ImageBitmap = 0;
+
+    private const int ListControl = 2001;
+    private const int DetailsControl = 2002;
+    private const int IconControl = 2003;
     private const int ButtonUp = 1001;
     private const int ButtonDown = 1002;
     private const int ButtonToggle = 1003;
@@ -79,8 +93,8 @@ internal static class NativeStartupDialog
                 WsOverlappedWindow,
                 0,
                 0,
-                860,
-                620,
+                1200,
+                700,
                 IntPtr.Zero,
                 IntPtr.Zero,
                 instance,
@@ -93,7 +107,10 @@ internal static class NativeStartupDialog
 
             RuntimeDiagnostics.Info("Startup selector window created.");
 
-            var state = new DialogState(options);
+            var state = new DialogState(options)
+            {
+                WindowHandle = hwnd
+            };
             lock (Sync)
             {
                 States[hwnd] = state;
@@ -122,8 +139,8 @@ internal static class NativeStartupDialog
 
     private static void BuildControls(IntPtr hwnd, DialogState state)
     {
-        CreateWindowEx(0, "STATIC", "勾选要加载的模组；使用上下按钮调整顺序。应用后本次启动立即生效。",
-            WsChild | WsVisible, 20, 18, 800, 30, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        CreateWindowEx(0, "STATIC", "勾选要加载的模组；使用上下按钮调整顺序。点击模组查看详细信息。",
+            WsChild | WsVisible, 20, 18, 1120, 30, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
         state.ListHandle = CreateWindowEx(
             WsExClientEdge,
@@ -132,29 +149,43 @@ internal static class NativeStartupDialog
             WsChild | WsVisible | LvsReport | LvsSingleSelect | LvsShowSelAlways,
             20,
             58,
-            620,
-            460,
+            540,
+            520,
             hwnd,
-            IntPtr.Zero,
+            new IntPtr(ListControl),
             IntPtr.Zero,
             IntPtr.Zero);
 
         SendMessage(state.ListHandle, LvmSetExtendedListViewStyle,
             new IntPtr(LvsExGridLines | LvsExFullRowSelect | LvsExCheckBoxes),
             new IntPtr(LvsExGridLines | LvsExFullRowSelect | LvsExCheckBoxes));
-        AddColumn(state.ListHandle, "模组 / 来源", 590);
-        RebuildList(state);
+        AddColumn(state.ListHandle, "模组 / 来源", 510);
 
-        CreateButton(hwnd, ButtonUp, "上移", 665, 80);
-        CreateButton(hwnd, ButtonDown, "下移", 665, 125);
-        CreateButton(hwnd, ButtonToggle, "启用 / 禁用", 665, 170);
-        CreateButton(hwnd, ButtonApply, "应用并继续", 545, 545);
-        CreateButton(hwnd, ButtonCancel, "取消", 665, 545);
+        CreateButton(hwnd, ButtonUp, "上移", 580, 80, 130);
+        CreateButton(hwnd, ButtonDown, "下移", 580, 125, 130);
+        CreateButton(hwnd, ButtonToggle, "启用 / 禁用", 580, 170, 130);
+
+        CreateWindowEx(0, "STATIC", "模组详细信息",
+            WsChild | WsVisible, 740, 58, 420, 28, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        state.DetailsHandle = CreateWindowEx(0, "STATIC", string.Empty,
+            WsChild | WsVisible | SsLeft, 740, 90, 420, 185, hwnd,
+            new IntPtr(DetailsControl), IntPtr.Zero, IntPtr.Zero);
+        state.IconHandle = CreateWindowEx(WsExClientEdge, "STATIC", "暂无图标",
+            WsChild | WsVisible | WsBorder | SsCenterImage, 740, 295, 180, 180, hwnd,
+            new IntPtr(IconControl), IntPtr.Zero, IntPtr.Zero);
+        state.IconStatusHandle = CreateWindowEx(0, "STATIC", string.Empty,
+            WsChild | WsVisible, 935, 305, 220, 100, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+
+        CreateButton(hwnd, ButtonApply, "应用并继续", 885, 595, 130);
+        CreateButton(hwnd, ButtonCancel, "取消", 1035, 595, 130);
+
+        RebuildList(state);
+        UpdateDetails(state);
     }
 
-    private static void CreateButton(IntPtr parent, int id, string text, int x, int y)
+    private static void CreateButton(IntPtr parent, int id, string text, int x, int y, int width)
     {
-        CreateWindowEx(0, "BUTTON", text, WsChild | WsVisible, x, y, 165, 36,
+        CreateWindowEx(0, "BUTTON", text, WsChild | WsVisible, x, y, width, 36,
             parent, new IntPtr(id), IntPtr.Zero, IntPtr.Zero);
     }
 
@@ -291,6 +322,85 @@ internal static class NativeStartupDialog
         }
     }
 
+    private static void UpdateDetails(DialogState state)
+    {
+        if (state.SelectedIndex < 0 || state.SelectedIndex >= state.Items.Count) return;
+
+        var option = state.Items[state.SelectedIndex];
+        var source = option.Source == 2 ? "Steam Workshop" : "本地 mods 目录";
+        var details = $"名称：{option.Name}\r\n" +
+                      $"ID：{option.Id}\r\n" +
+                      $"版本：{(string.IsNullOrWhiteSpace(option.Version) ? "未知" : option.Version)}\r\n" +
+                      $"作者：{(string.IsNullOrWhiteSpace(option.Author) ? "未知" : option.Author)}\r\n" +
+                      $"来源：{source}\r\n" +
+                      $"状态：{(option.IsEnabled ? "已启用" : "未启用")}\r\n\r\n" +
+                      (string.IsNullOrWhiteSpace(option.Description) ? "暂无描述。" : option.Description);
+        SetWindowText(state.DetailsHandle, details);
+        state.IconRequest++;
+        var request = state.IconRequest;
+        ClearIcon(state);
+
+        if (!string.IsNullOrWhiteSpace(option.IconPath) && File.Exists(option.IconPath))
+        {
+            DisplayIcon(state, option.IconPath);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(option.WorkshopId))
+        {
+            SetWindowText(state.IconStatusHandle, "该 Mod 没有可用图标。");
+            return;
+        }
+
+        SetWindowText(state.IconStatusHandle, "正在加载创意工坊图标……");
+        var window = state.WindowHandle;
+        _ = Task.Run(async () =>
+        {
+            var path = await WorkshopIconCache.GetAsync(option.WorkshopId).ConfigureAwait(false);
+            lock (Sync)
+            {
+                state.PendingIconPath = path;
+            }
+
+            PostMessage(window, WmIconLoaded, new IntPtr(request), IntPtr.Zero);
+        });
+    }
+
+    private static void ClearIcon(DialogState state)
+    {
+        if (state.Picture is not null)
+        {
+            SendMessage(state.IconHandle, StmSetImage, new IntPtr(ImageBitmap), IntPtr.Zero);
+            state.Picture.Dispose();
+            state.Picture = null;
+        }
+
+        SetWindowText(state.IconHandle, "暂无图标");
+    }
+
+    private static void DisplayIcon(DialogState state, string path)
+    {
+        try
+        {
+            var picture = NativePicture.Load(path);
+            if (picture is null)
+            {
+                SetWindowText(state.IconStatusHandle, "图标格式无法读取。");
+                return;
+            }
+
+            state.Picture = picture;
+            SetWindowText(state.IconHandle, string.Empty);
+            SendMessage(state.IconHandle, StmSetImage, new IntPtr(ImageBitmap), picture.Handle);
+            SetWindowText(state.IconStatusHandle, "创意工坊预览图");
+        }
+        catch (Exception exception)
+        {
+            RuntimeDiagnostics.Info("Could not display mod icon: " + exception.Message);
+            SetWindowText(state.IconStatusHandle, "图标加载失败。");
+        }
+    }
+
     private static IntPtr WndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
     {
         DialogState? state;
@@ -328,6 +438,33 @@ internal static class NativeStartupDialog
             return IntPtr.Zero;
         }
 
+        if (message == WmNotify && state is not null && lParam != IntPtr.Zero)
+        {
+            var header = Marshal.PtrToStructure<NmHeader>(lParam);
+            if (header.IdFrom == new IntPtr(ListControl) && header.Code == LvnItemChanged)
+            {
+                var selected = SelectedIndex(state.ListHandle);
+                if (selected >= 0 && selected != state.SelectedIndex)
+                {
+                    state.SelectedIndex = selected;
+                    UpdateDetails(state);
+                }
+            }
+
+            return IntPtr.Zero;
+        }
+
+        if (message == WmIconLoaded && state is not null)
+        {
+            var request = wParam.ToInt32();
+            if (request == state.IconRequest && !string.IsNullOrWhiteSpace(state.PendingIconPath))
+            {
+                DisplayIcon(state, state.PendingIconPath);
+            }
+
+            return IntPtr.Zero;
+        }
+
         if (message == WmClose && state is not null)
         {
             state.Result = null;
@@ -337,6 +474,11 @@ internal static class NativeStartupDialog
 
         if (message == WmDestroy)
         {
+            if (state is not null)
+            {
+                ClearIcon(state);
+            }
+
             lock (Sync)
             {
                 States.Remove(hwnd);
@@ -358,6 +500,7 @@ internal static class NativeStartupDialog
         (state.Items[from], state.Items[to]) = (state.Items[to], state.Items[from]);
         state.SelectedIndex = to;
         RebuildList(state);
+        UpdateDetails(state);
     }
 
     private static void Toggle(DialogState state)
@@ -368,6 +511,7 @@ internal static class NativeStartupDialog
         if (option.IsBootstrap) return;
         option.IsEnabled = !option.IsEnabled;
         RebuildList(state);
+        UpdateDetails(state);
     }
 
     private sealed class DialogState
@@ -378,8 +522,15 @@ internal static class NativeStartupDialog
         }
 
         public List<RuntimeModOption> Items { get; }
+        public IntPtr WindowHandle { get; set; }
         public IntPtr ListHandle { get; set; }
+        public IntPtr DetailsHandle { get; set; }
+        public IntPtr IconHandle { get; set; }
+        public IntPtr IconStatusHandle { get; set; }
         public int SelectedIndex { get; set; }
+        public int IconRequest { get; set; }
+        public string? PendingIconPath { get; set; }
+        public NativePicture? Picture { get; set; }
         public IReadOnlyList<RuntimeModOption>? Result { get; set; }
     }
 
@@ -434,6 +585,14 @@ internal static class NativeStartupDialog
         public IntPtr ColumnData;
         public IntPtr ColumnFormat;
         public int Group;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NmHeader
+    {
+        public IntPtr HwndFrom;
+        public IntPtr IdFrom;
+        public int Code;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -495,6 +654,12 @@ internal static class NativeStartupDialog
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool SetWindowText(IntPtr hwnd, string text);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     private static extern int GetMessage(out Message message, IntPtr hwnd, uint filterMin, uint filterMax);

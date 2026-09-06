@@ -178,6 +178,37 @@ Run("mod order operation moves an item to the requested insertion point", () =>
     Assert(movedBeforeSecond.SequenceEqual(new[] { "first", "fourth", "second", "third" }), "moving before an item should preserve the remaining order");
 });
 
+Run("runtime startup order preserves enabled order and sorts disabled mods deterministically", () =>
+{
+    var mods = new[]
+    {
+        new RuntimeModOption("disabled_z", "Zeta", 2, 0, false, new object()),
+        new RuntimeModOption("enabled_second", "Second", 2, 0, true, new object()),
+        new RuntimeModOption("disabled_a", "Alpha", 2, 0, false, new object()),
+        new RuntimeModOption("enabled_first", "First", 2, 0, true, new object())
+    };
+    var savedOrder = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["enabled_first::2"] = 0,
+        ["enabled_second::2"] = 1,
+        ["disabled_z::2"] = 2,
+        ["disabled_a::2"] = 3
+    };
+
+    var ordered = RuntimeModOrderPolicy.Normalize(mods, savedOrder);
+
+    Assert(ordered.Select(mod => mod.Id).SequenceEqual(new[]
+    {
+        "enabled_first", "enabled_second", "disabled_a", "disabled_z"
+    }), "enabled mods should retain saved order and disabled mods should use deterministic name order");
+});
+
+Run("bootstrap is inert when loaded outside the StS2 runtime", () =>
+{
+    var options = RuntimeModAccess.ReadOptions();
+    Assert(options.Count == 0, "the bootstrap should not throw when StS2 types are unavailable");
+});
+
 Run("startup profile is written beside the selected settings file", () =>
 {
     var root = CreateTempDirectory();

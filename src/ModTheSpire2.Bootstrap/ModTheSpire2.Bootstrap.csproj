@@ -10,7 +10,7 @@
     <AssemblyVersion>0.3.0</AssemblyVersion>
     <DebugType>none</DebugType>
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <NoWarn>CA2255</NoWarn>
+    <NoWarn>CA2255;CA1416</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- The game supplies Harmony at runtime; this compatible package is build-time only. -->
