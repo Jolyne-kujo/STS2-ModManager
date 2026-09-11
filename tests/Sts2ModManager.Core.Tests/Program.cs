@@ -2,6 +2,12 @@ using System.Text.Json.Nodes;
 using ModTheSpire2.Bootstrap;
 using Sts2ModManager.Core;
 
+if (args.Length == 3 && args[0] == "--startup-exit-fixture")
+{
+    StartupSessionTests.RunExitFixture(args[1], args[2]);
+    return 42;
+}
+
 var failures = new List<string>();
 
 Run("scanner reads StS2 manifest metadata and reports malformed manifests", () =>
@@ -326,9 +332,15 @@ Run("Godot PCK writer emits a StS2-compatible version 3 pack directory", () =>
     }
 });
 
+Run("startup actions save before continuing or exiting, and retry failed saves", StartupSessionTests.Run);
+Run("startup exit terminates the process without continuing game loading", StartupSessionTests.VerifyProcessExit);
+Run("runtime persistence propagates actual disk failures and completes writes synchronously", RuntimePersistenceTests.Run);
+
 if (args.Contains("--native-ui"))
 {
     Run("native selector shows full descriptions and scrolls the hovered pane", NativeDialogTests.Run);
+    Run("native save-and-exit captures checkbox and order edits", NativeDialogTests.SaveAndExit);
+    Run("native apply continues with checkbox and order edits", NativeDialogTests.Apply);
 }
 
 if (failures.Count > 0)

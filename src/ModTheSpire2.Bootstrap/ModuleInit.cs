@@ -15,16 +15,16 @@ public static class ModuleInit
             if (options.Count == 0) return;
 
             RuntimeDiagnostics.Info("Bootstrap module initialized. Showing startup selector for " + options.Count + " mods.");
-            var selected = NativeStartupDialog.Show(options);
-            if (selected is null)
-            {
-                RuntimeDiagnostics.Info("Startup selector cancelled; preserving the existing mod configuration.");
-                return;
-            }
-
-            RuntimeModAccess.SaveSelection(selected);
-            StartupLoadGate.Configure(selected);
-            RuntimeDiagnostics.Info("Startup selector applied.");
+            StartupSession.Run(options,
+                NativeStartupDialog.Show,
+                RuntimeModAccess.SaveSelection,
+                selected =>
+                {
+                    StartupLoadGate.Configure(selected);
+                    RuntimeDiagnostics.Info("Startup selector applied; continuing game startup.");
+                },
+                StartupSession.ExitCurrentProcess,
+                NativeStartupDialog.ShowSaveError);
         }
         catch (Exception exception)
         {

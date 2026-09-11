@@ -7,3 +7,5 @@ dist-*/
 *.exe
 *.user
 *.suo
+*.log
+workshop/content/

@@ -6,7 +6,11 @@ using ModTheSpire2.Bootstrap;
 internal static class NativeDialogTests
 {
     // These tests send messages only to controls owned by this test process.
-    public static void Run()
+    public static void Run() => CheckDialog(StartupAction.Exit);
+    public static void SaveAndExit() => CheckDialog(StartupAction.SaveAndExit);
+    public static void Apply() => CheckDialog(StartupAction.Continue);
+
+    private static void CheckDialog(StartupAction action)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Native UI tests need Windows.");
         var description = string.Join("\n", Enumerable.Range(1, 240)
@@ -69,16 +73,28 @@ internal static class NativeDialogTests
                 Check(FirstLine(details) == 0, "new mod description should start at the top");
                 SendMessage(details, 0x0102, 'Q', 0); // WM_CHAR must not edit read-only metadata
                 Check(ReadText(details).StartsWith("名称："), "description must be read-only");
+                Check(ReadText(GetDlgItem(window, 1005)) == "保存并退出", "exit button has the wrong label");
+                SendMessage(GetDlgItem(window, 1003), 0x00F5, 0, 0); // disable selected test mod
+                SendMessage(GetDlgItem(window, 1001), 0x00F5, 0, 0); // move it to the first row
             }
             finally
             {
-                if (window != IntPtr.Zero) PostMessage(window, 0x0010, 0, 0); // close fixture, no game/settings involved
+                if (window != IntPtr.Zero)
+                {
+                    if (action == StartupAction.Exit) PostMessage(window, 0x0010, 0, 0);
+                    else PostMessage(GetDlgItem(window, action == StartupAction.SaveAndExit ? 1005 : 1004), 0x00F5, 0, 0);
+                }
             }
         });
 
         var selected = NativeStartupDialog.Show(mods);
         inspector.GetAwaiter().GetResult();
-        Check(selected is null, "closing the fixture should cancel");
+        Check(selected?.Action == action, "window returned the wrong startup action");
+        if (action != StartupAction.Exit)
+        {
+            Check(selected!.Options[0].Id == "mod-1" && !selected.Options[0].IsEnabled,
+                "save should capture the changed order and checkbox state");
+        }
     }
 
     private static void Wheel(IntPtr recipient, Rect hovered, int delta)

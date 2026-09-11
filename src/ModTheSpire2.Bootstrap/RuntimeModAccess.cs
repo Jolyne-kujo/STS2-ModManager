@@ -128,9 +128,19 @@ internal static class RuntimeModAccess
         var modManagerType = FindType(ModManagerName);
         FindField(modManagerType, "_settings")?.SetValue(null, modSettings);
 
-        var saveSettings = FindMethod(saveManagerType, "SaveSettings", Type.EmptyTypes)
-                           ?? throw new InvalidOperationException("SaveManager.SaveSettings() was not found.");
-        saveSettings.Invoke(saveManager, null);
+        PersistSettings(saveManager);
+    }
+
+    internal static void PersistSettings(object saveManager)
+    {
+        // The public SaveManager wrapper catches and logs all write errors. Invoke
+        // the same synchronous settings writer directly so failed saves reach the
+        // selector's retry handler instead of silently continuing or exiting.
+        var settingsManager = GetMember(saveManager, "_settingsSaveManager")
+                              ?? throw new InvalidOperationException("SaveManager._settingsSaveManager was not found.");
+        var saveSettings = FindMethod(settingsManager.GetType(), "SaveSettings", Type.EmptyTypes)
+                           ?? throw new InvalidOperationException("SettingsSaveManager.SaveSettings() was not found.");
+        saveSettings.Invoke(settingsManager, null);
     }
 
     public static void ResetDisabledState(RuntimeModOption option)

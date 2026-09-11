@@ -52,21 +52,28 @@ internal static class NativeStartupDialog
     private const int ButtonDown = 1002;
     private const int ButtonToggle = 1003;
     private const int ButtonApply = 1004;
-    private const int ButtonCancel = 1005;
+    private const int ButtonSaveExit = 1005;
 
     private static readonly object Sync = new();
     private static readonly Dictionary<IntPtr, DialogState> States = new();
     private static readonly WndProcDelegate WindowProc = WndProc;
     private static readonly string WindowClassName = "ModTheSpire2StartupSelector";
 
-    public static IReadOnlyList<RuntimeModOption>? Show(IReadOnlyList<RuntimeModOption> options)
+    public static StartupDialogResult? Show(IReadOnlyList<RuntimeModOption> options)
     {
         // The selector is intentionally modal on the game loading thread. Its own
         // Win32 message loop keeps the window responsive while ModManager is paused.
         return Run(options);
     }
 
-    private static IReadOnlyList<RuntimeModOption>? Run(IReadOnlyList<RuntimeModOption> options)
+    public static void ShowSaveError(Exception exception)
+    {
+        RuntimeDiagnostics.Error("Could not save startup selection; reopening the selector.", exception);
+        MessageBox(IntPtr.Zero, "配置保存失败，游戏尚未继续启动。请检查设置文件权限后重试。\n\n" +
+            exception.GetBaseException().Message, "ModTheSpire 2 - 保存失败", 0x00000010 | 0x00040000);
+    }
+
+    private static StartupDialogResult? Run(IReadOnlyList<RuntimeModOption> options)
     {
         try
         {
@@ -171,7 +178,7 @@ internal static class NativeStartupDialog
             new IntPtr(DetailsControl), IntPtr.Zero, IntPtr.Zero);
 
         CreateButton(hwnd, ButtonApply, "应用并继续", 885, 595, 130);
-        CreateButton(hwnd, ButtonCancel, "取消", 1035, 595, 130);
+        CreateButton(hwnd, ButtonSaveExit, "保存并退出", 1035, 595, 130);
 
         RebuildList(state);
         UpdateDetails(state);
@@ -379,11 +386,12 @@ internal static class NativeStartupDialog
                     break;
                 case ButtonApply:
                     SyncChecks(state);
-                    state.Result = state.Items.ToArray();
+                    state.Result = new StartupDialogResult(StartupAction.Continue, state.Items.ToArray());
                     DestroyWindow(hwnd);
                     break;
-                case ButtonCancel:
-                    state.Result = null;
+                case ButtonSaveExit:
+                    SyncChecks(state);
+                    state.Result = new StartupDialogResult(StartupAction.SaveAndExit, state.Items.ToArray());
                     DestroyWindow(hwnd);
                     break;
             }
@@ -409,7 +417,7 @@ internal static class NativeStartupDialog
 
         if (message == WmClose && state is not null)
         {
-            state.Result = null;
+            state.Result = new StartupDialogResult(StartupAction.Exit, Array.Empty<RuntimeModOption>());
             DestroyWindow(hwnd);
             return IntPtr.Zero;
         }
@@ -462,7 +470,7 @@ internal static class NativeStartupDialog
         public IntPtr ListHandle { get; set; }
         public IntPtr DetailsHandle { get; set; }
         public int SelectedIndex { get; set; }
-        public IReadOnlyList<RuntimeModOption>? Result { get; set; }
+        public StartupDialogResult? Result { get; set; }
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -597,6 +605,9 @@ internal static class NativeStartupDialog
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool SetWindowText(IntPtr hwnd, string text);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBox(IntPtr hwnd, string text, string caption, uint type);
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
