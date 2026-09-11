@@ -5,12 +5,12 @@
     <Nullable>enable</Nullable>
     <RootNamespace>ModTheSpire2.Bootstrap</RootNamespace>
     <AssemblyName>ModTheSpire2</AssemblyName>
-    <Version>0.3.0</Version>
-    <FileVersion>0.3.0</FileVersion>
-    <AssemblyVersion>0.3.0</AssemblyVersion>
+    <Version>0.3.1</Version>
+    <FileVersion>0.3.1</FileVersion>
+    <AssemblyVersion>0.3.1</AssemblyVersion>
     <DebugType>none</DebugType>
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <NoWarn>CA2255;CA1416</NoWarn>
+    <NoWarn>CA2255</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- The game supplies Harmony at runtime; this compatible package is build-time only. -->

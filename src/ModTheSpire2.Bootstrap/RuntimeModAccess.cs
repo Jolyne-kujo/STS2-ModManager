@@ -14,10 +14,7 @@ internal sealed class RuntimeModOption
         object runtimeMod,
         string author = "",
         string version = "",
-        string description = "",
-        string sourcePath = "",
-        string iconPath = "",
-        string workshopId = "")
+        string description = "")
     {
         Id = id;
         Name = string.IsNullOrWhiteSpace(name) ? id : name;
@@ -28,9 +25,6 @@ internal sealed class RuntimeModOption
         Author = author;
         Version = version;
         Description = description;
-        SourcePath = sourcePath;
-        IconPath = iconPath;
-        WorkshopId = workshopId;
     }
 
     public string Id { get; }
@@ -42,9 +36,6 @@ internal sealed class RuntimeModOption
     public string Author { get; }
     public string Version { get; }
     public string Description { get; }
-    public string SourcePath { get; }
-    public string IconPath { get; }
-    public string WorkshopId { get; }
     public bool IsBootstrap => Id.Equals("ModTheSpire2", StringComparison.OrdinalIgnoreCase);
     public string Key => Id + "::" + Source;
 }
@@ -75,13 +66,6 @@ internal static class RuntimeModAccess
             var source = ToInt(GetMember(runtimeMod, "modSource"));
             var key = BuildKey(id, source);
             var state = ToInt(GetMember(runtimeMod, "state"));
-            var sourcePath = FindSourcePath(runtimeMod);
-            var iconPath = FindIconPath(manifest, sourcePath);
-            var workshopId = AsString(GetMember(runtimeMod, "workshopId"));
-            if (string.IsNullOrWhiteSpace(workshopId) || workshopId == "0")
-            {
-                workshopId = FindWorkshopId(sourcePath);
-            }
             result.Add(new RuntimeModOption(
                 id,
                 AsString(GetMember(manifest, "name")) ?? id,
@@ -91,10 +75,7 @@ internal static class RuntimeModAccess
                 runtimeMod,
                 AsString(GetMember(manifest, "author")) ?? string.Empty,
                 AsString(GetMember(manifest, "version")) ?? string.Empty,
-                AsString(GetMember(manifest, "description")) ?? string.Empty,
-                sourcePath,
-                iconPath,
-                workshopId ?? string.Empty));
+                AsString(GetMember(manifest, "description")) ?? string.Empty));
         }
 
         return RuntimeModOrderPolicy.Normalize(
@@ -201,67 +182,6 @@ internal static class RuntimeModAccess
         }
 
         return values;
-    }
-
-    private static string FindSourcePath(object runtimeMod)
-    {
-        var candidates = new[]
-        {
-            "path", "Path", "directory", "Directory", "modPath", "ModPath",
-            "folderPath", "FolderPath", "assemblyPath", "AssemblyPath", "dllPath", "DllPath"
-        };
-
-        foreach (var candidate in candidates)
-        {
-            var value = AsString(GetMember(runtimeMod, candidate));
-            if (!string.IsNullOrWhiteSpace(value) && (File.Exists(value) || Directory.Exists(value)))
-            {
-                return value;
-            }
-        }
-
-        return string.Empty;
-    }
-
-    private static string FindIconPath(object? manifest, string sourcePath)
-    {
-        var manifestIcon = AsString(GetMember(manifest, "icon")) ??
-                           AsString(GetMember(manifest, "icon_path"));
-        var root = File.Exists(sourcePath) ? Path.GetDirectoryName(sourcePath) : sourcePath;
-        if (!string.IsNullOrWhiteSpace(manifestIcon))
-        {
-            var candidate = Path.IsPathRooted(manifestIcon)
-                ? manifestIcon
-                : Path.Combine(root ?? string.Empty, manifestIcon);
-            if (File.Exists(candidate)) return candidate;
-        }
-
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return string.Empty;
-        var preferred = new[] { "icon.png", "icon.jpg", "icon.jpeg", "thumbnail.png", "thumbnail.jpg", "preview.png", "preview.jpg" };
-        foreach (var fileName in preferred)
-        {
-            var candidate = Directory.EnumerateFiles(root, fileName, SearchOption.AllDirectories).FirstOrDefault();
-            if (candidate is not null) return candidate;
-        }
-
-        return Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
-            .FirstOrDefault(path => path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-                                    path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                                    path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
-    }
-
-    private static string FindWorkshopId(string sourcePath)
-    {
-        if (string.IsNullOrWhiteSpace(sourcePath)) return string.Empty;
-        var parts = sourcePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        for (var i = 0; i + 2 < parts.Length; i++)
-        {
-            if (!parts[i].Equals("content", StringComparison.OrdinalIgnoreCase)) continue;
-            var candidate = parts[i + 2];
-            if (candidate.All(char.IsDigit)) return candidate;
-        }
-
-        return string.Empty;
     }
 
     private static object? GetMember(object? instance, string name)

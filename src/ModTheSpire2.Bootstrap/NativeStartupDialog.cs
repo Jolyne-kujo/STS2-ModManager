@@ -7,6 +7,8 @@ internal static class NativeStartupDialog
     private const uint WsOverlappedWindow = 0x00CF0000;
     private const uint WsChild = 0x40000000;
     private const uint WsVisible = 0x10000000;
+    private const uint WsVScroll = 0x00200000;
+    private const uint WsTabStop = 0x00010000;
     private const uint WsExClientEdge = 0x00000200;
     private const uint WsExTopmost = 0x00000008;
     private const int SwShow = 5;
@@ -15,8 +17,7 @@ internal static class NativeStartupDialog
     private const uint WmDestroy = 0x0002;
     private const uint WmCommand = 0x0111;
     private const uint WmNotify = 0x004E;
-    private const uint WmApp = 0x8000;
-    private const uint WmIconLoaded = WmApp + 1;
+    private const uint WmMouseWheel = 0x020A;
     private const uint BnClicked = 0;
 
     private const uint LvmFirst = 0x1000;
@@ -39,16 +40,14 @@ internal static class NativeStartupDialog
     private const uint LvniSelected = 0x0002;
     private const int LvnItemChanged = -101;
 
-    private const uint SsLeft = 0x0000;
-    private const uint SsBitmap = 0x000E;
-    private const uint SsCenterImage = 0x0200;
-    private const uint WsBorder = 0x00800000;
-    private const uint StmSetImage = 0x0172;
-    private const uint ImageBitmap = 0;
+    private const uint EsMultiline = 0x0004;
+    private const uint EsAutoVScroll = 0x0040;
+    private const uint EsReadOnly = 0x0800;
+    private const uint EmSetSel = 0x00B1;
+    private const uint EmScrollCaret = 0x00B7;
 
     private const int ListControl = 2001;
     private const int DetailsControl = 2002;
-    private const int IconControl = 2003;
     private const int ButtonUp = 1001;
     private const int ButtonDown = 1002;
     private const int ButtonToggle = 1003;
@@ -107,10 +106,7 @@ internal static class NativeStartupDialog
 
             RuntimeDiagnostics.Info("Startup selector window created.");
 
-            var state = new DialogState(options)
-            {
-                WindowHandle = hwnd
-            };
+            var state = new DialogState(options);
             lock (Sync)
             {
                 States[hwnd] = state;
@@ -124,6 +120,7 @@ internal static class NativeStartupDialog
 
             while (GetMessage(out var message, IntPtr.Zero, 0, 0) > 0)
             {
+                RouteMouseWheel(state, ref message);
                 TranslateMessage(ref message);
                 DispatchMessage(ref message);
             }
@@ -139,14 +136,14 @@ internal static class NativeStartupDialog
 
     private static void BuildControls(IntPtr hwnd, DialogState state)
     {
-        CreateWindowEx(0, "STATIC", "勾选要加载的模组；使用上下按钮调整顺序。点击模组查看详细信息。",
+        CreateWindowEx(0, "STATIC", "勾选要加载的模组；使用上下按钮调整顺序。点击查看详情，鼠标移到左右栏可滚轮浏览。",
             WsChild | WsVisible, 20, 18, 1120, 30, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
         state.ListHandle = CreateWindowEx(
             WsExClientEdge,
             "SysListView32",
             string.Empty,
-            WsChild | WsVisible | LvsReport | LvsSingleSelect | LvsShowSelAlways,
+            WsChild | WsVisible | WsTabStop | LvsReport | LvsSingleSelect | LvsShowSelAlways,
             20,
             58,
             540,
@@ -167,14 +164,11 @@ internal static class NativeStartupDialog
 
         CreateWindowEx(0, "STATIC", "模组详细信息",
             WsChild | WsVisible, 740, 58, 420, 28, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-        state.DetailsHandle = CreateWindowEx(0, "STATIC", string.Empty,
-            WsChild | WsVisible | SsLeft, 740, 90, 420, 185, hwnd,
+        // Multiline edit wraps long lines and supplies native vertical scrolling and selection/copy.
+        state.DetailsHandle = CreateWindowEx(WsExClientEdge, "EDIT", string.Empty,
+            WsChild | WsVisible | WsVScroll | WsTabStop | EsMultiline | EsAutoVScroll | EsReadOnly,
+            740, 90, 420, 488, hwnd,
             new IntPtr(DetailsControl), IntPtr.Zero, IntPtr.Zero);
-        state.IconHandle = CreateWindowEx(WsExClientEdge, "STATIC", "暂无图标",
-            WsChild | WsVisible | WsBorder | SsCenterImage, 740, 295, 180, 180, hwnd,
-            new IntPtr(IconControl), IntPtr.Zero, IntPtr.Zero);
-        state.IconStatusHandle = CreateWindowEx(0, "STATIC", string.Empty,
-            WsChild | WsVisible, 935, 305, 220, 100, hwnd, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
         CreateButton(hwnd, ButtonApply, "应用并继续", 885, 595, 130);
         CreateButton(hwnd, ButtonCancel, "取消", 1035, 595, 130);
@@ -335,70 +329,29 @@ internal static class NativeStartupDialog
                       $"来源：{source}\r\n" +
                       $"状态：{(option.IsEnabled ? "已启用" : "未启用")}\r\n\r\n" +
                       (string.IsNullOrWhiteSpace(option.Description) ? "暂无描述。" : option.Description);
-        SetWindowText(state.DetailsHandle, details);
-        state.IconRequest++;
-        var request = state.IconRequest;
-        ClearIcon(state);
-
-        if (!string.IsNullOrWhiteSpace(option.IconPath) && File.Exists(option.IconPath))
-        {
-            DisplayIcon(state, option.IconPath);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(option.WorkshopId))
-        {
-            SetWindowText(state.IconStatusHandle, "该 Mod 没有可用图标。");
-            return;
-        }
-
-        SetWindowText(state.IconStatusHandle, "正在加载创意工坊图标……");
-        var window = state.WindowHandle;
-        _ = Task.Run(async () =>
-        {
-            var path = await WorkshopIconCache.GetAsync(option.WorkshopId).ConfigureAwait(false);
-            lock (Sync)
-            {
-                state.PendingIconPath = path;
-            }
-
-            PostMessage(window, WmIconLoaded, new IntPtr(request), IntPtr.Zero);
-        });
+        SetWindowText(state.DetailsHandle, details.ReplaceLineEndings("\r\n"));
+        // A newly selected mod always opens at the start of its description.
+        SendMessage(state.DetailsHandle, EmSetSel, IntPtr.Zero, IntPtr.Zero);
+        SendMessage(state.DetailsHandle, EmScrollCaret, IntPtr.Zero, IntPtr.Zero);
     }
 
-    private static void ClearIcon(DialogState state)
+    private static void RouteMouseWheel(DialogState state, ref Message message)
     {
-        if (state.Picture is not null)
-        {
-            SendMessage(state.IconHandle, StmSetImage, new IntPtr(ImageBitmap), IntPtr.Zero);
-            state.Picture.Dispose();
-            state.Picture = null;
-        }
-
-        SetWindowText(state.IconHandle, "暂无图标");
+        if (message.MessageId != WmMouseWheel) return;
+        // WM_MOUSEWHEEL may target the focused control rather than the hovered one.
+        // Retarget once before dispatch, preserving native scroll speed and fine wheel deltas.
+        // The coordinates are signed screen coordinates (including monitors left of the primary).
+        var coordinates = message.LParam.ToInt64();
+        var x = unchecked((short)(coordinates & 0xFFFF));
+        var y = unchecked((short)((coordinates >> 16) & 0xFFFF));
+        if (ContainsPoint(state.ListHandle, x, y)) message.Window = state.ListHandle;
+        else if (ContainsPoint(state.DetailsHandle, x, y)) message.Window = state.DetailsHandle;
     }
 
-    private static void DisplayIcon(DialogState state, string path)
+    private static bool ContainsPoint(IntPtr control, int x, int y)
     {
-        try
-        {
-            var picture = NativePicture.Load(path);
-            if (picture is null)
-            {
-                SetWindowText(state.IconStatusHandle, "图标格式无法读取。");
-                return;
-            }
-
-            state.Picture = picture;
-            SetWindowText(state.IconHandle, string.Empty);
-            SendMessage(state.IconHandle, StmSetImage, new IntPtr(ImageBitmap), picture.Handle);
-            SetWindowText(state.IconStatusHandle, "创意工坊预览图");
-        }
-        catch (Exception exception)
-        {
-            RuntimeDiagnostics.Info("Could not display mod icon: " + exception.Message);
-            SetWindowText(state.IconStatusHandle, "图标加载失败。");
-        }
+        return GetWindowRect(control, out var rect) &&
+               x >= rect.Left && x < rect.Right && y >= rect.Top && y < rect.Bottom;
     }
 
     private static IntPtr WndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
@@ -454,17 +407,6 @@ internal static class NativeStartupDialog
             return IntPtr.Zero;
         }
 
-        if (message == WmIconLoaded && state is not null)
-        {
-            var request = wParam.ToInt32();
-            if (request == state.IconRequest && !string.IsNullOrWhiteSpace(state.PendingIconPath))
-            {
-                DisplayIcon(state, state.PendingIconPath);
-            }
-
-            return IntPtr.Zero;
-        }
-
         if (message == WmClose && state is not null)
         {
             state.Result = null;
@@ -474,11 +416,6 @@ internal static class NativeStartupDialog
 
         if (message == WmDestroy)
         {
-            if (state is not null)
-            {
-                ClearIcon(state);
-            }
-
             lock (Sync)
             {
                 States.Remove(hwnd);
@@ -522,15 +459,9 @@ internal static class NativeStartupDialog
         }
 
         public List<RuntimeModOption> Items { get; }
-        public IntPtr WindowHandle { get; set; }
         public IntPtr ListHandle { get; set; }
         public IntPtr DetailsHandle { get; set; }
-        public IntPtr IconHandle { get; set; }
-        public IntPtr IconStatusHandle { get; set; }
         public int SelectedIndex { get; set; }
-        public int IconRequest { get; set; }
-        public string? PendingIconPath { get; set; }
-        public NativePicture? Picture { get; set; }
         public IReadOnlyList<RuntimeModOption>? Result { get; set; }
     }
 
@@ -615,6 +546,15 @@ internal static class NativeStartupDialog
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct InitCommonControlsData
     {
         public uint Size;
@@ -640,7 +580,7 @@ internal static class NativeStartupDialog
     private static extern IntPtr CreateWindowEx(uint extendedStyle, string className, string windowName,
         uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr DefWindowProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
@@ -659,15 +599,15 @@ internal static class NativeStartupDialog
     private static extern bool SetWindowText(IntPtr hwnd, string text);
 
     [DllImport("user32.dll")]
-    private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+    private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetMessage(out Message message, IntPtr hwnd, uint filterMin, uint filterMax);
 
     [DllImport("user32.dll")]
     private static extern bool TranslateMessage(ref Message message);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr DispatchMessage(ref Message message);
 
     [DllImport("user32.dll")]

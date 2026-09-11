@@ -326,6 +326,11 @@ Run("Godot PCK writer emits a StS2-compatible version 3 pack directory", () =>
     }
 });
 
+if (args.Contains("--native-ui"))
+{
+    Run("native selector shows full descriptions and scrolls the hovered pane", NativeDialogTests.Run);
+}
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"FAIL: {failures.Count} test(s)");
