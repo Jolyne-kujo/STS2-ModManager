@@ -1,6 +1,6 @@
 {
   "id": "ModTheSpire2",
-  "version": "v0.3.2",
+  "version": "v0.3.3",
   "name": "ModTheSpire 2 Bootstrap",
   "author": "ModTheSpire 2 contributors",
   "description": "Shows a startup mod selector inside StS2 with scrollable mod lists and full text details, then applies enabled state and stable load order before the remaining mods initialize.",

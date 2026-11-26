@@ -11,6 +11,7 @@ internal static class StartupLoadGate
     private static bool _configured;
     private static bool _replayStarted;
     private static bool _replaying;
+    internal static bool IsReplaying => _replaying;
 
     public static void Configure(IReadOnlyList<RuntimeModOption> ordered)
     {
@@ -24,7 +25,7 @@ internal static class StartupLoadGate
 
             foreach (var option in _ordered)
             {
-                RuntimeModAccess.ResetDisabledState(option);
+                RuntimeModAccess.SynchronizeLoadState(option);
             }
 
             var bootstrap = _ordered.FirstOrDefault(option => option.IsBootstrap);
@@ -52,8 +53,7 @@ internal static class StartupLoadGate
             if (!_replayStarted)
             {
                 _replayStarted = true;
-                ReplayRemaining();
-                return false;
+                return !ReplayRemaining();
             }
 
             if (HandledKeys.Contains(key))
@@ -61,12 +61,13 @@ internal static class StartupLoadGate
                 return false;
             }
 
-            HandledKeys.Add(key);
-            return false;
+            // Workshop installations may be detected after initial startup. Those
+            // entries were never part of the selection and belong to the native loader.
+            return !_ordered.Any(option => option.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         }
     }
 
-    private static void ReplayRemaining()
+    private static bool ReplayRemaining()
     {
         var tryLoadMethod = AccessTools.Method(
             AccessTools.TypeByName("MegaCrit.Sts2.Core.Modding.ModManager"),
@@ -74,7 +75,20 @@ internal static class StartupLoadGate
         if (tryLoadMethod is null)
         {
             RuntimeDiagnostics.Error("Could not find ModManager.TryLoadMod.");
-            return;
+            _configured = false;
+            return false;
+        }
+
+        try
+        {
+            _ordered = RuntimeModAccess.PrepareLoadOrder(RuntimeModAccess.ModManagerType, _ordered).ToList();
+            RuntimeDiagnostics.Info("Effective native replay order=" + string.Join(" > ", _ordered.Select(option => option.Key)));
+        }
+        catch (Exception exception)
+        {
+            _configured = false;
+            RuntimeDiagnostics.Error("Native load-order preparation failed; returning control to the game loader.", exception);
+            return false;
         }
 
         _replaying = true;
@@ -84,8 +98,8 @@ internal static class StartupLoadGate
             {
                 if (HandledKeys.Contains(option.Key)) continue;
                 HandledKeys.Add(option.Key);
-                if (!option.IsEnabled && !option.IsBootstrap) continue;
-
+                // Disabled entries still pass through the native method so the new
+                // loader can emit OnModDetected without initializing their code.
                 try
                 {
                     tryLoadMethod.Invoke(null, new[] { option.RuntimeMod });
@@ -102,6 +116,7 @@ internal static class StartupLoadGate
         }
 
         RuntimeDiagnostics.Info("Startup load gate finished replaying selected mods.");
+        return true;
     }
 }
 
@@ -115,4 +130,13 @@ internal static class ModTheSpire2TryLoadModPatch
     }
 
     private static bool Prefix(object __0) => StartupLoadGate.Prefix(__0);
+}
+
+[HarmonyPatch]
+internal static class ModTheSpire2FinalSelectionPatch
+{
+    private static MethodBase? TargetMethod() => AccessTools.PropertySetter(
+        AccessTools.TypeByName("MegaCrit.Sts2.Core.Modding.ModSettings"), "ModList");
+
+    private static void Postfix(object __instance) => RuntimeModAccess.RestoreNativeSelection(__instance);
 }

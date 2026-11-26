@@ -5,9 +5,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>ModTheSpire2.Bootstrap</RootNamespace>
     <AssemblyName>ModTheSpire2</AssemblyName>
-    <Version>0.3.2</Version>
-    <FileVersion>0.3.2</FileVersion>
-    <AssemblyVersion>0.3.2</AssemblyVersion>
+    <Version>0.3.3</Version>
+    <FileVersion>0.3.3</FileVersion>
+    <AssemblyVersion>0.3.3</AssemblyVersion>
     <DebugType>none</DebugType>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <NoWarn>CA2255</NoWarn>

@@ -335,6 +335,13 @@ Run("Godot PCK writer emits a StS2-compatible version 3 pack directory", () =>
 Run("startup actions save before continuing or exiting, and retry failed saves", StartupSessionTests.Run);
 Run("startup exit terminates the process without continuing game loading", StartupSessionTests.VerifyProcessExit);
 Run("runtime persistence propagates actual disk failures and completes writes synchronously", RuntimePersistenceTests.Run);
+Run("runtime loading synchronizes selected states without resetting initialized mods", RuntimeLoadCompatibilityTests.SynchronizesNativeStates);
+Run("runtime replay respects native dependency and duplicate rules", RuntimeLoadCompatibilityTests.UsesNativeDependencyOrder);
+Run("native dependency sorting keeps bootstrap first for the next startup", RuntimeLoadCompatibilityTests.KeepsBootstrapFirstAfterNativeSort);
+Run("hidden bootstrap duplicates cannot overwrite startup priority", RuntimeLoadCompatibilityTests.KeepsHiddenBootstrapDuplicatesTogether);
+Run("temporarily undiscovered workshop mods retain their saved flags and relative positions", RuntimeLoadCompatibilityTests.PreservesUnavailableWorkshopSelections);
+Run("native finalization preserves source-specific flags without overriding later edits", RuntimeLoadCompatibilityTests.RestoresSourceSpecificSelectionOnce);
+Run("native filtering cannot reset already initialized states", RuntimeLoadCompatibilityTests.NativeFilteringRetainsInitializedStates);
 
 if (args.Contains("--native-ui"))
 {

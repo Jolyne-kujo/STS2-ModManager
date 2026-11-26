@@ -46,6 +46,8 @@ internal static class RuntimeModAccess
     private const string SaveManagerName = "MegaCrit.Sts2.Core.Saves.SaveManager";
     private const string SettingsSaveModName = "MegaCrit.Sts2.Core.Modding.SettingsSaveMod";
     private const string ModSourceName = "MegaCrit.Sts2.Core.Modding.ModSource";
+    private static object? _pendingSettings;
+    private static IReadOnlyList<RuntimeSavedSelection>? _pendingSelection;
 
     public static IReadOnlyList<RuntimeModOption> ReadOptions()
     {
@@ -62,6 +64,8 @@ internal static class RuntimeModAccess
             var manifest = GetMember(runtimeMod, "manifest");
             var id = AsString(GetMember(manifest, "id"));
             if (string.IsNullOrWhiteSpace(id)) continue;
+            if (id.Equals("ModTheSpire2", StringComparison.OrdinalIgnoreCase) &&
+                AsString(GetMember(runtimeMod, "state")) == "DisabledDuplicate") continue;
 
             var source = ToInt(GetMember(runtimeMod, "modSource"));
             var key = BuildKey(id, source);
@@ -71,7 +75,8 @@ internal static class RuntimeModAccess
                 AsString(GetMember(manifest, "name")) ?? id,
                 source,
                 state,
-                savedStates.TryGetValue(key, out var saved) ? saved.IsEnabled : state != 3,
+                AsString(GetMember(runtimeMod, "state")) != "DisabledDuplicate" &&
+                    (savedStates.TryGetValue(key, out var saved) ? saved.IsEnabled : AsString(GetMember(runtimeMod, "state")) != "Disabled"),
                 runtimeMod,
                 AsString(GetMember(manifest, "author")) ?? string.Empty,
                 AsString(GetMember(manifest, "version")) ?? string.Empty,
@@ -103,23 +108,12 @@ internal static class RuntimeModAccess
 
         var settingsModType = FindType(SettingsSaveModName)
                               ?? throw new InvalidOperationException("SettingsSaveMod type was not found.");
-        var sourceType = FindType(ModSourceName)
-                         ?? throw new InvalidOperationException("ModSource type was not found.");
         var listType = typeof(List<>).MakeGenericType(settingsModType);
-        var list = (IList)(Activator.CreateInstance(listType)
-                            ?? throw new InvalidOperationException("Mod settings list could not be created."));
-
-        foreach (var option in orderedOptions)
-        {
-            var item = Activator.CreateInstance(settingsModType);
-            if (item is null) continue;
-
-            SetMember(item, "Id", option.Id);
-            SetMember(item, "Source", Enum.ToObject(sourceType, option.Source));
-            SetMember(item, "IsEnabled", option.IsEnabled || option.IsBootstrap);
-            list.Add(item);
-        }
-
+        var selection = RuntimeSelectionPolicy.Merge(
+            orderedOptions.Select(option => new RuntimeSavedSelection(option.Id, option.Source, option.IsEnabled || option.IsBootstrap)).ToArray(),
+            ReadSettingsList(GetMember(modSettings, "ModList")));
+        var list = CreateSettingsList(listType, selection);
+        _pendingSettings = null;
         SetMember(modSettings, "ModList", list);
         SetMember(modSettings, "PlayerAgreedToModLoading", true);
 
@@ -129,6 +123,58 @@ internal static class RuntimeModAccess
         FindField(modManagerType, "_settings")?.SetValue(null, modSettings);
 
         PersistSettings(saveManager);
+        RememberSelection(modSettings, selection);
+    }
+
+    internal static void RememberSelection(object settings, IReadOnlyList<RuntimeSavedSelection> selection)
+    {
+        _pendingSettings = settings;
+        _pendingSelection = selection.ToArray();
+    }
+
+    internal static void RestoreNativeSelection(object settings)
+    {
+        if (!ReferenceEquals(settings, _pendingSettings) || _pendingSelection is null || StartupLoadGate.IsReplaying) return;
+        var snapshot = _pendingSelection;
+        _pendingSettings = null; // One-shot: never override subsequent in-game user edits.
+        _pendingSelection = null;
+        try
+        {
+            var current = GetMember(settings, "ModList") as IList
+                          ?? throw new InvalidOperationException("Finalized mod selection is unavailable.");
+            var savedFlags = snapshot.ToDictionary(item => item.Key, item => item.IsEnabled, StringComparer.OrdinalIgnoreCase);
+            var corrected = ReadSettingsList(current).Select(item => savedFlags.TryGetValue(item.Key, out var enabled)
+                ? item with { IsEnabled = enabled } : item).ToArray();
+            var merged = RuntimeSelectionPolicy.Merge(corrected, snapshot);
+            SetMember(settings, "ModList", CreateSettingsList(current.GetType(), merged));
+            RuntimeDiagnostics.Info("Preserved source-specific selections after native loader finalization.");
+        }
+        catch (Exception exception)
+        {
+            RuntimeDiagnostics.Error("Failed to preserve finalized mod selection.", exception);
+        }
+    }
+
+    private static IReadOnlyList<RuntimeSavedSelection> ReadSettingsList(object? value) =>
+        value is IEnumerable list ? list.Cast<object>().Select(item => new RuntimeSavedSelection(
+            AsString(GetMember(item, "Id")) ?? "", ToInt(GetMember(item, "Source")), ToBool(GetMember(item, "IsEnabled"), true)))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Id)).ToArray() : Array.Empty<RuntimeSavedSelection>();
+
+    private static IList CreateSettingsList(Type listType, IReadOnlyList<RuntimeSavedSelection> selection)
+    {
+        var itemType = listType.GetGenericArguments().Single();
+        var sourceType = FindProperty(itemType, "Source")?.PropertyType ?? FindField(itemType, "Source")?.FieldType
+                         ?? throw new MissingMemberException(itemType.FullName, "Source");
+        var list = (IList)Activator.CreateInstance(listType)!;
+        foreach (var saved in selection)
+        {
+            var item = Activator.CreateInstance(itemType)!;
+            SetMember(item, "Id", saved.Id);
+            SetMember(item, "Source", Enum.ToObject(sourceType, saved.Source));
+            SetMember(item, "IsEnabled", saved.IsEnabled);
+            list.Add(item);
+        }
+        return list;
     }
 
     internal static void PersistSettings(object saveManager)
@@ -143,17 +189,75 @@ internal static class RuntimeModAccess
         saveSettings.Invoke(settingsManager, null);
     }
 
-    public static void ResetDisabledState(RuntimeModOption option)
+    public static void SynchronizeLoadState(RuntimeModOption option)
     {
-        // ModManager.RemoveDisabledMods marks disabled entries with ModLoadState.Disabled.
-        // Re-enable them before the load gate invokes TryLoadMod for this launch.
-        if (!option.IsEnabled || option.LoadState != 3) return;
-
         var stateField = FindField(option.RuntimeMod.GetType(), "state")
                          ?? throw new InvalidOperationException("ModLoadState field was not found.");
-        stateField.SetValue(option.RuntimeMod, Enum.ToObject(stateField.FieldType, 0));
-        option.LoadState = 0;
+        var current = stateField.GetValue(option.RuntimeMod)?.ToString();
+        // Re-evaluate duplicates after the selection changes, but never reinitialize
+        // a mod whose code has already run or whose earlier initialization failed.
+        if (current is not ("None" or "Disabled" or "DisabledDuplicate")) return;
+        var next = Enum.Parse(stateField.FieldType, option.IsEnabled || option.IsBootstrap ? "None" : "Disabled");
+        stateField.SetValue(option.RuntimeMod, next);
+        option.LoadState = Convert.ToInt32(next);
     }
+
+    internal static IReadOnlyList<RuntimeModOption> PrepareLoadOrder(Type? modManager, IReadOnlyList<RuntimeModOption> options)
+    {
+        if (modManager is null) return options;
+        var settings = GetMember(modManager, "_settings")
+                       ?? throw new InvalidOperationException("ModManager settings are unavailable.");
+        var savedList = GetMember(settings, "ModList")
+                        ?? throw new InvalidOperationException("ModManager saved order is unavailable.");
+        var removeDisabled = FindMethod(modManager, "RemoveDisabledMods", Type.EmptyTypes)
+                             ?? throw new MissingMethodException(modManager.FullName, "RemoveDisabledMods");
+        var sort = FindMethod(modManager, "SortModList", new[] { savedList.GetType() });
+        // Initialize holds a live enumerator over the original list. Replace its
+        // field instead of mutating that list; the loader tail then persists the
+        // canonical order, including deterministic disabled entries.
+        var modsField = FindField(modManager, "_mods")
+                        ?? throw new MissingFieldException(modManager.FullName, "_mods");
+        var original = modsField.GetValue(null) as IEnumerable
+                       ?? throw new InvalidOperationException("Native mod collection is unavailable.");
+        var replacement = Activator.CreateInstance(modsField.FieldType) as IList
+                          ?? throw new InvalidOperationException("Native mod collection could not be created.");
+        var selectedObjects = new HashSet<object>(options.Select(option => option.RuntimeMod), ReferenceEqualityComparer.Instance);
+        foreach (var option in options) replacement.Add(option.RuntimeMod);
+        foreach (var mod in original)
+            if (mod is not null && !selectedObjects.Contains(mod)) replacement.Add(mod);
+        modsField.SetValue(null, replacement);
+        // Old game versions have no dependency sorter. Keep their user-selected order.
+        var initializedStates = options.Select(option => (option.RuntimeMod, Field: FindField(option.RuntimeMod.GetType(), "state")))
+            .Where(pair => pair.Field?.GetValue(pair.RuntimeMod)?.ToString() is "Loaded" or "Failed" or "AddedAtRuntime")
+            .Select(pair => (pair.RuntimeMod, pair.Field, Value: pair.Field!.GetValue(pair.RuntimeMod))).ToArray();
+        try { removeDisabled.Invoke(null, null); }
+        finally
+        {
+            foreach (var saved in initializedStates) saved.Field!.SetValue(saved.RuntimeMod, saved.Value);
+        }
+        if (sort is null) return options;
+        if (GetMember(modManager, "_circularDependencies") is IDictionary cycles) cycles.Clear();
+        sort.Invoke(null, new[] { savedList });
+        if (GetMember(modManager, "Mods") is not IEnumerable runtimeOrder)
+            throw new InvalidOperationException("Native sorted mod list is unavailable.");
+        var byObject = options.ToDictionary(option => option.RuntimeMod, ReferenceEqualityComparer.Instance);
+        // The native sorter puts already-loaded mods at the end. Bootstrap is
+        // already loaded here, but must stay first when Initialize rewrites ModList.
+        var canonical = runtimeOrder.Cast<object>().OrderByDescending(mod =>
+            byObject.TryGetValue(mod, out var option) && option.IsBootstrap ? 2 :
+            AsString(GetMember(GetMember(mod, "manifest"), "id"))?.Equals("ModTheSpire2", StringComparison.OrdinalIgnoreCase) == true ? 1 : 0).ToArray();
+        var result = new List<RuntimeModOption>();
+        foreach (var mod in canonical)
+            if (mod is not null && byObject.TryGetValue(mod, out var option)) result.Add(option);
+        if (result.Count != options.Count)
+            throw new InvalidOperationException("Native mod list changed while preparing the startup selection.");
+        var finalList = (IList)Activator.CreateInstance(modsField.FieldType)!;
+        foreach (var mod in canonical) finalList.Add(mod);
+        modsField.SetValue(null, finalList);
+        return result;
+    }
+
+    internal static Type? ModManagerType => FindType(ModManagerName);
 
     public static string GetKey(object runtimeMod)
     {

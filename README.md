@@ -4,6 +4,24 @@
 
 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3799576017)
 
+## v0.3.3 兼容更新
+
+针对本机游戏 `v0.114.0`（public-beta，2026-11-26）核验加载器、模组元数据与保存 API。
+
+- 使用游戏原生依赖排序与重复模组选择规则，用户顺序作为优先级；有依赖关系时，前置模组先加载。不会自动启用被用户禁用的依赖。
+- 开关同步到原生加载状态；已加载或已失败的模组不会被重复初始化。
+- 替换原生列表而非修改正在枚举的列表，启动结束后保留规范顺序，管理器仍在首位。
+- 保留禁用项的原生检测通知；启动后新发现的模组交回游戏处理。
+- 启动末尾按 ID 与来源恢复独立开关；Steam 暂未返回安装信息的模组仍保留原来的配置，不因暂时缺席而删除。
+
+游戏更新后可用只读 API 检查脚本核验接口（不运行游戏代码、不修改设置）：
+
+```powershell
+.\tools\Test-GameApi.ps1 -GameDirectory 'E:\steam\steamapps\common\Slay the Spire 2'
+```
+
+检查器使用构建工具缓存中的 Mono.Cecil；也可通过 `-CecilAssembly` 指定本机 DLL。
+
 本项目使用 StS2 原生 Mod 包格式：`DLL + JSON + PCK`。启动游戏时，Bootstrap DLL 会在原生 Mod 加载循环继续之前创建启动选择器，显示已安装的 Mod，并支持：
 
 - 勾选启用或禁用 Mod
@@ -18,7 +36,7 @@
 
 ## 构建
 
-要求 .NET 9 SDK。Bootstrap DLL 目标为 `net8.0`，以匹配 StS2 的 C# Mod 运行时；PCK 打包器生成 StS2 兼容的 Godot PCK v3 文件。
+要求 .NET 9 SDK。Bootstrap DLL 保持 `net8.0` 目标，由游戏的 .NET 9 运行时加载，发布包不附带游戏 DLL 或 Harmony；PCK 打包器生成 StS2 兼容的 Godot PCK v3 文件。
 
 运行测试并生成发布包：
 
